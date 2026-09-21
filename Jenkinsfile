@@ -2,23 +2,22 @@ pipeline {
     agent any
 
     environment {
-        // Change this to your Docker Hub username/repository
-        IMAGE_NAME = "YOUR_DOCKERHUB_USERNAME/kanban-dashboard"
+        // Docker Hub repository
+        IMAGE_NAME = "rahulbansode07/kanban-dashboard"
 
-        // Jenkins Docker Hub credential ID
+        // Jenkins credential ID
         DOCKER_CREDENTIALS = "dockerhub-credentials"
     }
 
     stages {
 
-        // 1. Checkout code from GitHub
         stage('Checkout') {
             steps {
-                checkout scm
+                git branch: 'main',
+                    url: 'https://github.com/rahulbansode07/project2.git'
             }
         }
 
-        // 2. Build Docker image
         stage('Docker Build') {
             steps {
                 script {
@@ -33,7 +32,6 @@ pipeline {
             }
         }
 
-        // 3. Login to Docker Hub
         stage('Docker Hub Login') {
             steps {
                 withCredentials([
@@ -52,7 +50,6 @@ pipeline {
             }
         }
 
-        // 4. Push image to Docker Hub
         stage('Push to Docker Hub') {
             steps {
                 sh """
@@ -66,16 +63,16 @@ pipeline {
 
     post {
         success {
-            echo "================================="
+            echo "======================================"
             echo "BUILD AND PUSH SUCCESSFUL"
             echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
-            echo "================================="
+            echo "======================================"
         }
 
         failure {
-            echo "================================="
+            echo "======================================"
             echo "BUILD OR PUSH FAILED"
-            echo "================================="
+            echo "======================================"
         }
 
         always {
