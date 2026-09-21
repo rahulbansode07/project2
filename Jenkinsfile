@@ -2,23 +2,34 @@ pipeline {
     agent any
 
     environment {
-        // Docker Hub repository
-        IMAGE_NAME = "rahuldevops718/kanban-dashboard"
 
-        // Jenkins Docker Hub credential ID
-        DOCKER_CREDENTIALS = "dockerhub-credentials"
+        // ==========================================
+        // AWS ECR CONFIGURATION
+        // ==========================================
+
+        AWS_REGION = "ap-south-1"
+
+        ECR_REGISTRY = "458563125461.dkr.ecr.ap-south-1.amazonaws.com"
+
+        ECR_REPOSITORY = "458563125461.dkr.ecr.ap-south-1.amazonaws.com/rahul/project2"
+
+        // Jenkins AWS credential ID
+        AWS_CREDENTIALS = "aws-ecr-credentials"
 
         // Docker container name
         CONTAINER_NAME = "kanban-dashboard"
     }
 
+
     stages {
 
         // ==========================================
-        // 1. CHECKOUT CODE FROM GITHUB
+        // 1. CHECKOUT CODE
         // ==========================================
+
         stage('Checkout') {
             steps {
+
                 git branch: 'main',
                     url: 'https://github.com/rahulbansode07/project2.git'
             }
@@ -26,23 +37,30 @@ pipeline {
 
 
         // ==========================================
-        // 2. BUILD DOCKER IMAGE
+        // 2. DOCKER BUILD
         // ==========================================
+
         stage('Docker Build') {
             steps {
+
                 script {
 
-                    // Create unique image tag
                     env.IMAGE_TAG = "build-${BUILD_NUMBER}"
 
-                    echo "Building image:"
-                    echo "${IMAGE_NAME}:${IMAGE_TAG}"
+                    echo "======================================"
+                    echo "BUILDING DOCKER IMAGE"
+                    echo "======================================"
+
+                    echo "Image:"
+                    echo "${ECR_REPOSITORY}:${IMAGE_TAG}"
                 }
+
 
                 sh """
                     docker build \
-                    -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    -t ${ECR_REPOSITORY}:${IMAGE_TAG} .
                 """
+
 
                 echo "Docker image built successfully."
             }
@@ -50,42 +68,63 @@ pipeline {
 
 
         // ==========================================
-        // 3. DOCKER HUB LOGIN
+        // 3. AWS ECR LOGIN
         // ==========================================
-        stage('Docker Hub Login') {
+
+        stage('AWS ECR Login') {
             steps {
+
+                echo "======================================"
+                echo "LOGGING IN TO AWS ECR"
+                echo "======================================"
+
+
                 withCredentials([
-                    usernamePassword(
-                        credentialsId: "${DOCKER_CREDENTIALS}",
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
                 ]) {
 
-                    sh '''
-                        echo "$DOCKER_PASSWORD" | docker login \
-                        -u "$DOCKER_USERNAME" \
-                        --password-stdin
-                    '''
+                    sh """
+                        aws sts get-caller-identity
+
+                        aws ecr get-login-password \
+                        --region ${AWS_REGION} | \
+                        docker login \
+                        --username AWS \
+                        --password-stdin ${ECR_REGISTRY}
+                    """
                 }
 
-                echo "Docker Hub login successful."
+
+                echo "AWS ECR login successful."
             }
         }
 
 
         // ==========================================
-        // 4. PUSH IMAGE TO DOCKER HUB
+        // 4. PUSH IMAGE TO ECR
         // ==========================================
-        stage('Push to Docker Hub') {
+
+        stage('Push to ECR') {
             steps {
 
-                sh """
-                    docker push ${IMAGE_NAME}:${IMAGE_TAG}
-                """
+                withCredentials([
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: "${AWS_CREDENTIALS}"]
+                ]) {
 
-                echo "Docker image pushed successfully."
-                echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                    sh """
+                        docker push ${ECR_REPOSITORY}:${IMAGE_TAG}
+                    """
+                }
+
+
+                echo "======================================"
+                echo "IMAGE PUSHED TO ECR"
+                echo "======================================"
+
+                echo "Image:"
+                echo "${ECR_REPOSITORY}:${IMAGE_TAG}"
             }
         }
 
@@ -93,13 +132,19 @@ pipeline {
         // ==========================================
         // 5. DEPLOY NEW CONTAINER
         // ==========================================
+
         stage('Deploy New Container') {
             steps {
+
                 script {
 
-                    echo "Checking current container..."
+                    echo "======================================"
+                    echo "CHECKING CURRENT CONTAINER"
+                    echo "======================================"
+
 
                     // Get currently running container image
+
                     def oldImage = sh(
                         script: """
                             docker inspect ${CONTAINER_NAME} \
@@ -110,9 +155,8 @@ pipeline {
                     ).trim()
 
 
-                    // ------------------------------------------
                     // Save previous image for rollback
-                    // ------------------------------------------
+
                     if (oldImage) {
 
                         env.PREVIOUS_IMAGE = oldImage
@@ -129,9 +173,8 @@ pipeline {
                     }
 
 
-                    // ------------------------------------------
                     // Stop old container
-                    // ------------------------------------------
+
                     echo "Stopping old container..."
 
                     sh """
@@ -139,9 +182,8 @@ pipeline {
                     """
 
 
-                    // ------------------------------------------
                     // Remove old container
-                    // ------------------------------------------
+
                     echo "Removing old container..."
 
                     sh """
@@ -149,25 +191,26 @@ pipeline {
                     """
 
 
-                    // ------------------------------------------
                     // Start new container
-                    // ------------------------------------------
+
                     echo "Starting new container..."
 
                     sh """
                         docker run -d \
                             --name ${CONTAINER_NAME} \
                             -p 5173:5173 \
-                            ${IMAGE_NAME}:${IMAGE_TAG}
+                            ${ECR_REPOSITORY}:${IMAGE_TAG}
                     """
 
 
                     echo "======================================"
                     echo "NEW CONTAINER STARTED"
                     echo "======================================"
-                    echo "Container: ${CONTAINER_NAME}"
-                    echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
-                    echo "Port: 5173"
+
+                    echo "Container : ${CONTAINER_NAME}"
+                    echo "Image     : ${ECR_REPOSITORY}:${IMAGE_TAG}"
+                    echo "Port      : 5173"
+
                     echo "======================================"
                 }
             }
@@ -175,21 +218,26 @@ pipeline {
 
 
         // ==========================================
-        // 6. HEALTH CHECK NEW CONTAINER
+        // 6. HEALTH CHECK
         // ==========================================
+
         stage('Health Check New Container') {
             steps {
+
                 script {
 
                     echo "======================================"
                     echo "STARTING HEALTH CHECK"
                     echo "======================================"
 
+
                     def healthy = false
 
-                    // Try 6 times
+
+                    // Try 8 times
                     // 10 seconds between attempts
-                    for (int i = 1; i <= 6; i++) {
+
+                    for (int i = 1; i <= 8; i++) {
 
                         def status = sh(
                             script: """
@@ -201,7 +249,7 @@ pipeline {
                         ).trim()
 
 
-                        echo "Health check attempt ${i}/6"
+                        echo "Health check attempt ${i}/8"
                         echo "Docker Health Status: ${status}"
 
 
@@ -228,14 +276,21 @@ pipeline {
                     }
 
 
-                    // ------------------------------------------
-                    // If Docker health check failed
-                    // ------------------------------------------
+                    // Health check failed
+
                     if (!healthy) {
 
                         echo "======================================"
                         echo "HEALTH CHECK FAILED"
                         echo "======================================"
+
+
+                        echo "Container status:"
+
+                        sh """
+                            docker ps -a
+                        """
+
 
                         echo "Container logs:"
 
@@ -243,14 +298,15 @@ pipeline {
                             docker logs ${CONTAINER_NAME} || true
                         """
 
+
                         error("New container failed health check.")
                     }
 
 
-                    // ------------------------------------------
-                    // Application HTTP check
-                    // ------------------------------------------
+                    // HTTP check
+
                     echo "Checking application on port 5173..."
+
 
                     sh """
                         curl -f http://localhost:5173/ || exit 1
@@ -270,35 +326,41 @@ pipeline {
     // ==========================================
     // POST ACTIONS
     // ==========================================
+
     post {
+
 
         // ==========================================
         // SUCCESS
         // ==========================================
+
         success {
 
             echo "======================================"
             echo "        PIPELINE SUCCESSFUL"
             echo "======================================"
+
             echo "Build Number : ${BUILD_NUMBER}"
-            echo "Image        : ${IMAGE_NAME}:${IMAGE_TAG}"
+            echo "Image        : ${ECR_REPOSITORY}:${IMAGE_TAG}"
             echo "Container    : ${CONTAINER_NAME}"
             echo "Port         : 5173"
+            echo "Registry     : AWS ECR"
+            echo "Region       : ${AWS_REGION}"
             echo "Status       : SUCCESS"
+
             echo "======================================"
         }
 
 
         // ==========================================
-        // FAILURE + AUTOMATIC ROLLBACK
+        // FAILURE + ROLLBACK
         // ==========================================
+
         failure {
 
             echo "======================================"
             echo "        PIPELINE FAILED"
             echo "======================================"
-
-            echo "Checking whether rollback is possible..."
 
 
             script {
@@ -309,29 +371,26 @@ pipeline {
                     echo "STARTING AUTOMATIC ROLLBACK"
                     echo "======================================"
 
-                    echo "Previous working image:"
+                    echo "Previous image:"
                     echo "${env.PREVIOUS_IMAGE}"
 
 
-                    // ------------------------------------------
-                    // Stop failed/new container
-                    // ------------------------------------------
+                    // Stop failed container
+
                     sh """
                         docker stop ${CONTAINER_NAME} || true
                     """
 
 
-                    // ------------------------------------------
-                    // Remove failed/new container
-                    // ------------------------------------------
+                    // Remove failed container
+
                     sh """
                         docker rm ${CONTAINER_NAME} || true
                     """
 
 
-                    // ------------------------------------------
-                    // Start previous working image
-                    // ------------------------------------------
+                    // Start previous image
+
                     echo "Starting previous working image..."
 
                     sh """
@@ -347,9 +406,8 @@ pipeline {
                     sleep 15
 
 
-                    // ------------------------------------------
                     // Verify rollback
-                    // ------------------------------------------
+
                     echo "Checking rollback application..."
 
                     sh """
@@ -360,9 +418,12 @@ pipeline {
                     echo "======================================"
                     echo "        ROLLBACK SUCCESSFUL"
                     echo "======================================"
+
                     echo "Running image:"
                     echo "${env.PREVIOUS_IMAGE}"
+
                     echo "======================================"
+
 
                 } else {
 
@@ -380,18 +441,22 @@ pipeline {
         // ==========================================
         // ALWAYS
         // ==========================================
+
         always {
 
-            echo "Cleaning Docker login..."
+            echo "Logging out from ECR..."
 
-            sh 'docker logout || true'
+            sh """
+                docker logout ${ECR_REGISTRY} || true
+            """
+
 
             echo "Cleaning Jenkins workspace..."
 
             cleanWs()
 
+
             echo "Cleanup completed."
         }
     }
 }
-
