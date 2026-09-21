@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         // Docker Hub repository
-        IMAGE_NAME = "rahulbansode07/kanban-dashboard"
+        IMAGE_NAME = "rahuldevops718/kanban-dashboard"
 
         // Jenkins credential ID
         DOCKER_CREDENTIALS = "dockerhub-credentials"
