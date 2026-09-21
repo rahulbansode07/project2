@@ -1,3 +1,4 @@
+```groovy
 pipeline {
     agent any
 
@@ -7,10 +8,16 @@ pipeline {
 
         // Jenkins credential ID
         DOCKER_CREDENTIALS = "dockerhub-credentials"
+
+        // Docker container name
+        CONTAINER_NAME = "kanban-dashboard"
     }
 
     stages {
 
+        // ==========================================
+        // 1. CHECKOUT
+        // ==========================================
         stage('Checkout') {
             steps {
                 git branch: 'main',
@@ -18,6 +25,10 @@ pipeline {
             }
         }
 
+
+        // ==========================================
+        // 2. DOCKER BUILD
+        // ==========================================
         stage('Docker Build') {
             steps {
                 script {
@@ -32,6 +43,10 @@ pipeline {
             }
         }
 
+
+        // ==========================================
+        // 3. DOCKER HUB LOGIN
+        // ==========================================
         stage('Docker Hub Login') {
             steps {
                 withCredentials([
@@ -50,6 +65,10 @@ pipeline {
             }
         }
 
+
+        // ==========================================
+        // 4. PUSH TO DOCKER HUB
+        // ==========================================
         stage('Push to Docker Hub') {
             steps {
                 sh """
@@ -59,25 +78,46 @@ pipeline {
                 echo "Docker image pushed successfully."
             }
         }
-    }
 
-    post {
-        success {
-            echo "======================================"
-            echo "BUILD AND PUSH SUCCESSFUL"
-            echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
-            echo "======================================"
-        }
 
-        failure {
-            echo "======================================"
-            echo "BUILD OR PUSH FAILED"
-            echo "======================================"
-        }
+        // ==========================================
+        // 5. DEPLOY NEW CONTAINER
+        // ==========================================
+        stage('Deploy New Container') {
+            steps {
+                script {
 
-        always {
-            sh 'docker logout || true'
-            cleanWs()
-        }
-    }
-}
+                    // Check if old container exists
+                    def oldImage = sh(
+                        script: """
+                            docker inspect ${CONTAINER_NAME} \
+                            --format='{{.Config.Image}}' 2>/dev/null || true
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    // Save old image for rollback
+                    if (oldImage) {
+                        env.PREVIOUS_IMAGE = oldImage
+                        echo "Previous working image: ${env.PREVIOUS_IMAGE}"
+                    } else {
+                        env.PREVIOUS_IMAGE = ""
+                        echo "No previous container found. First deployment."
+                    }
+
+                    // Stop old container
+                    sh """
+                        docker stop ${CONTAINER_NAME} || true
+                    """
+
+                    // Remove old container
+                    sh """
+                        docker rm ${CONTAINER_NAME} || true
+                    """
+
+                    // Start new container
+                    sh """
+                        docker run -d \
+                            --name ${CONTAINER_NAME} \
+                            -p 5173:5173 \
+```
