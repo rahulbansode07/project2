@@ -2,21 +2,13 @@ pipeline {
     agent any
 
     environment {
-        // Docker Hub repository
         IMAGE_NAME = "rahuldevops718/kanban-dashboard"
-
-        // Jenkins credential ID
         DOCKER_CREDENTIALS = "dockerhub-credentials"
-
-        // Docker container name
         CONTAINER_NAME = "kanban-dashboard"
     }
 
     stages {
 
-        // ==========================================
-        // 1. CHECKOUT
-        // ==========================================
         stage('Checkout') {
             steps {
                 git branch: 'main',
@@ -24,10 +16,6 @@ pipeline {
             }
         }
 
-
-        // ==========================================
-        // 2. DOCKER BUILD
-        // ==========================================
         stage('Docker Build') {
             steps {
                 script {
@@ -42,10 +30,6 @@ pipeline {
             }
         }
 
-
-        // ==========================================
-        // 3. DOCKER HUB LOGIN
-        // ==========================================
         stage('Docker Hub Login') {
             steps {
                 withCredentials([
@@ -64,10 +48,6 @@ pipeline {
             }
         }
 
-
-        // ==========================================
-        // 4. PUSH TO DOCKER HUB
-        // ==========================================
         stage('Push to Docker Hub') {
             steps {
                 sh """
@@ -78,15 +58,12 @@ pipeline {
             }
         }
 
-
-        // ==========================================
-        // 5. DEPLOY NEW CONTAINER
-        // ==========================================
         stage('Deploy New Container') {
             steps {
                 script {
 
-                    // Check if old container exists
+                    echo "Checking previous container..."
+
                     def oldImage = sh(
                         script: """
                             docker inspect ${CONTAINER_NAME} \
@@ -95,28 +72,178 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    // Save old image for rollback
                     if (oldImage) {
                         env.PREVIOUS_IMAGE = oldImage
-                        echo "Previous working image: ${env.PREVIOUS_IMAGE}"
+                        echo "Previous image: ${env.PREVIOUS_IMAGE}"
                     } else {
                         env.PREVIOUS_IMAGE = ""
-                        echo "No previous container found. First deployment."
+                        echo "No previous container found."
                     }
 
-                    // Stop old container
+                    echo "Stopping old container..."
+
                     sh """
                         docker stop ${CONTAINER_NAME} || true
                     """
 
-                    // Remove old container
+                    echo "Removing old container..."
+
                     sh """
                         docker rm ${CONTAINER_NAME} || true
                     """
 
-                    // Start new container
+                    echo "Starting new container..."
+
                     sh """
                         docker run -d \
                             --name ${CONTAINER_NAME} \
                             -p 5173:5173 \
-```
+                            ${IMAGE_NAME}:${IMAGE_TAG}
+                    """
+
+                    echo "New container started."
+                }
+            }
+        }
+
+        stage('Health Check New Container') {
+            steps {
+                script {
+
+                    echo "Waiting for application to start..."
+
+                    sleep 15
+
+                    echo "Checking container status..."
+
+                    sh """
+                        docker ps \
+                        --filter "name=${CONTAINER_NAME}" \
+                        --filter "status=running" \
+                        --format '{{.Names}}' | grep -w ${CONTAINER_NAME}
+                    """
+
+                    echo "Checking Docker health status..."
+
+                    sh '''
+                        STATUS=$(docker inspect \
+                        --format='{{.State.Health.Status}}' \
+                        kanban-dashboard)
+
+                        echo "Health Status: $STATUS"
+
+                        if [ "$STATUS" != "healthy" ]; then
+                            echo "Health check failed."
+                            exit 1
+                        fi
+                    '''
+
+                    echo "Checking application..."
+
+                    sh """
+                        curl -f http://localhost:5173/ || exit 1
+                    """
+
+                    echo "======================================"
+                    echo "HEALTH CHECK PASSED"
+                    echo "======================================"
+                }
+            }
+        }
+
+        stage('Mark Success / Fail and Rollback') {
+            steps {
+                script {
+
+                    try {
+
+                        echo "Verifying deployment..."
+
+                        sh """
+                            docker ps \
+                            --filter "name=${CONTAINER_NAME}" \
+                            --filter "status=running" \
+                            --format '{{.Names}}' | grep -w ${CONTAINER_NAME}
+                        """
+
+                        sh """
+                            curl -f http://localhost:5173/ || exit 1
+                        """
+
+                        echo "======================================"
+                        echo "DEPLOYMENT SUCCESSFUL"
+                        echo "======================================"
+                        echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                        echo "Container: ${CONTAINER_NAME}"
+                        echo "======================================"
+
+                    } catch (Exception e) {
+
+                        echo "======================================"
+                        echo "DEPLOYMENT FAILED"
+                        echo "STARTING ROLLBACK"
+                        echo "======================================"
+
+                        if (env.PREVIOUS_IMAGE?.trim()) {
+
+                            echo "Rolling back to:"
+                            echo "${env.PREVIOUS_IMAGE}"
+
+                            sh """
+                                docker stop ${CONTAINER_NAME} || true
+                                docker rm ${CONTAINER_NAME} || true
+
+                                docker run -d \
+                                    --name ${CONTAINER_NAME} \
+                                    -p 5173:5173 \
+                                    ${env.PREVIOUS_IMAGE}
+                            """
+
+                            echo "Waiting for previous container..."
+
+                            sleep 15
+
+                            sh """
+                                curl -f http://localhost:5173/ || exit 1
+                            """
+
+                            echo "======================================"
+                            echo "ROLLBACK SUCCESSFUL"
+                            echo "======================================"
+
+                        } else {
+
+                            echo "No previous image available."
+                            echo "Rollback is not possible."
+                        }
+
+                        error("Deployment failed.")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "======================================"
+            echo "PIPELINE SUCCESSFUL"
+            echo "======================================"
+            echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+            echo "======================================"
+        }
+
+        failure {
+            echo "======================================"
+            echo "PIPELINE FAILED"
+            echo "======================================"
+        }
+
+        always {
+            sh 'docker logout || true'
+            cleanWs()
+        }
+    }
+}
+
