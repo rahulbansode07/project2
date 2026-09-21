@@ -18,6 +18,16 @@ pipeline {
 
         // Docker container name
         CONTAINER_NAME = "kanban-dashboard"
+
+        // ==========================================
+        // CONTAINER RESOURCE LIMITS
+        // ==========================================
+
+        // Maximum memory allowed
+        MEMORY_LIMIT = "512m"
+
+        // Maximum CPU allowed
+        CPU_LIMIT = "0.5"
     }
 
 
@@ -173,7 +183,9 @@ pipeline {
                     }
 
 
+                    // ------------------------------------------
                     // Stop old container
+                    // ------------------------------------------
 
                     echo "Stopping old container..."
 
@@ -182,7 +194,9 @@ pipeline {
                     """
 
 
+                    // ------------------------------------------
                     // Remove old container
+                    // ------------------------------------------
 
                     echo "Removing old container..."
 
@@ -191,13 +205,21 @@ pipeline {
                     """
 
 
+                    // ------------------------------------------
                     // Start new container
+                    // ------------------------------------------
 
                     echo "Starting new container..."
+
+                    echo "Memory Limit: ${MEMORY_LIMIT}"
+                    echo "CPU Limit: ${CPU_LIMIT}"
+
 
                     sh """
                         docker run -d \
                             --name ${CONTAINER_NAME} \
+                            --memory=${MEMORY_LIMIT} \
+                            --cpus=${CPU_LIMIT} \
                             -p 5173:5173 \
                             ${ECR_REPOSITORY}:${IMAGE_TAG}
                     """
@@ -210,6 +232,8 @@ pipeline {
                     echo "Container : ${CONTAINER_NAME}"
                     echo "Image     : ${ECR_REPOSITORY}:${IMAGE_TAG}"
                     echo "Port      : 5173"
+                    echo "Memory    : ${MEMORY_LIMIT}"
+                    echo "CPU       : ${CPU_LIMIT}"
 
                     echo "======================================"
                 }
@@ -218,7 +242,40 @@ pipeline {
 
 
         // ==========================================
-        // 6. HEALTH CHECK
+        // 6. VERIFY RESOURCE LIMITS
+        // ==========================================
+
+        stage('Verify Resource Limits') {
+            steps {
+
+                echo "======================================"
+                echo "VERIFYING CONTAINER RESOURCE LIMITS"
+                echo "======================================"
+
+
+                sh """
+                    docker inspect ${CONTAINER_NAME} \
+                    --format='Memory={{.HostConfig.Memory}} CPU={{.HostConfig.NanoCpus}}'
+                """
+
+
+                echo "Current container resource usage:"
+
+                sh """
+                    docker stats ${CONTAINER_NAME} \
+                    --no-stream
+                """
+
+
+                echo "======================================"
+                echo "RESOURCE LIMITS VERIFIED"
+                echo "======================================"
+            }
+        }
+
+
+        // ==========================================
+        // 7. HEALTH CHECK
         // ==========================================
 
         stage('Health Check New Container') {
@@ -276,7 +333,9 @@ pipeline {
                     }
 
 
+                    // ------------------------------------------
                     // Health check failed
+                    // ------------------------------------------
 
                     if (!healthy) {
 
@@ -303,7 +362,9 @@ pipeline {
                     }
 
 
+                    // ------------------------------------------
                     // HTTP check
+                    // ------------------------------------------
 
                     echo "Checking application on port 5173..."
 
@@ -346,6 +407,8 @@ pipeline {
             echo "Port         : 5173"
             echo "Registry     : AWS ECR"
             echo "Region       : ${AWS_REGION}"
+            echo "Memory Limit : ${MEMORY_LIMIT}"
+            echo "CPU Limit    : ${CPU_LIMIT}"
             echo "Status       : SUCCESS"
 
             echo "======================================"
@@ -389,13 +452,21 @@ pipeline {
                     """
 
 
-                    // Start previous image
+                    // ------------------------------------------
+                    // Start previous image WITH SAME LIMITS
+                    // ------------------------------------------
 
                     echo "Starting previous working image..."
+
+                    echo "Memory Limit: ${MEMORY_LIMIT}"
+                    echo "CPU Limit: ${CPU_LIMIT}"
+
 
                     sh """
                         docker run -d \
                             --name ${CONTAINER_NAME} \
+                            --memory=${MEMORY_LIMIT} \
+                            --cpus=${CPU_LIMIT} \
                             -p 5173:5173 \
                             ${env.PREVIOUS_IMAGE}
                     """
@@ -406,7 +477,9 @@ pipeline {
                     sleep 15
 
 
+                    // ------------------------------------------
                     // Verify rollback
+                    // ------------------------------------------
 
                     echo "Checking rollback application..."
 
@@ -421,6 +494,12 @@ pipeline {
 
                     echo "Running image:"
                     echo "${env.PREVIOUS_IMAGE}"
+
+                    echo "Memory Limit:"
+                    echo "${MEMORY_LIMIT}"
+
+                    echo "CPU Limit:"
+                    echo "${CPU_LIMIT}"
 
                     echo "======================================"
 
